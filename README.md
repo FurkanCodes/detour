@@ -28,7 +28,7 @@ each connection look, so filters that read the site name miss it.
   optionally over HTTPS.
 - **Live checks:** latency, a site check that loads your sites once after connecting, and
   a speed test you start yourself.
-- Tray icon, start at login, connect on launch. No telemetry and no account.
+- Tray icon (menu bar icon on macOS), start at login, connect on launch. No telemetry and no account.
 
 ## Download
 
@@ -37,13 +37,38 @@ Get the latest build from the [Releases page](https://github.com/FurkanCodes/det
 | | |
 |---|---|
 | **Windows 10 / 11** (64-bit) | Download `Detour-Windows.zip`, unzip it, run `Detour.exe` and accept the administrator prompt. |
-| **macOS 11+** (Apple Silicon and Intel) | Download `Detour-macOS.zip`, unzip it, move `Detour.app` to Applications, then right-click it and choose **Open** the first time. |
+| **macOS 11+** (Apple Silicon and Intel) | Download `Detour-macOS.zip`, unzip it, move `Detour.app` to Applications, then follow [First launch on macOS](#first-launch-on-macos). |
 
 Both builds are **not code-signed** yet, so Windows SmartScreen ("More info", then "Run
 anyway") and macOS Gatekeeper warn on first launch. Each release lists a SHA-256 checksum
 (`SHA256SUMS.txt`) so you can verify the download.
 
 Click **Connect**. Pick your provider on the Connect page if it is not the default.
+
+### First launch on macOS
+
+Because Detour is not signed or notarized by Apple, macOS may refuse to open it with a
+message like *"Apple could not verify "Detour" is free of malware"* or *"Detour is damaged
+and can't be opened"*. Nothing is wrong with the file: macOS marks everything downloaded
+from the internet and blocks apps it cannot verify.
+
+Remove that mark once, in Terminal (adjust the path if you put the app somewhere else):
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Detour.app
+```
+
+Then open Detour normally. You can also try right-clicking the app and choosing **Open**,
+or allowing it under System Settings → Privacy & Security → **Open Anyway**, but on recent
+macOS versions the command above is the reliable way.
+
+Only do this for builds you downloaded from this repository's
+[Releases page](https://github.com/FurkanCodes/detour/releases); check the download against
+`SHA256SUMS.txt` first:
+
+```sh
+shasum -a 256 Detour-macOS.zip
+```
 
 ## How it works
 
@@ -86,7 +111,9 @@ macOS has no packet driver Detour can use, so the Mac build runs only the local 
 while connected, points the system web proxy (`networksetup`) at it. It covers apps that
 follow the system proxy settings, which includes the major browsers. macOS asks for an
 administrator password when it needs one, and your previous proxy settings are restored on
-disconnect. The packet-level options (decoy handshake, encrypted DNS toggle, HTTP/3
+disconnect. Detour also puts a shield icon in the menu bar (solid when connected, faded when
+off); click it to turn Detour on or off, open the window or quit. With *Keep running in the
+menu bar* on, closing the window leaves Detour running there. The packet-level options (decoy handshake, encrypted DNS toggle, HTTP/3
 fallback) are Windows-only.
 
 ## FAQ
@@ -109,6 +136,9 @@ public speed servers, and only when you press the button.
 
 **Antivirus flags it.** Detour embeds the WinDivert driver, which tools that rewrite
 network packets are commonly flagged for. The source is here to read and build yourself.
+
+**macOS says Detour is damaged or can't be verified.** See
+[First launch on macOS](#first-launch-on-macos).
 
 **My browser says "proxy server is not responding".** Detour was closed abruptly while
 connected. Start Detour again (it repairs your proxy settings on launch), or turn off

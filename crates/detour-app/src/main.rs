@@ -143,7 +143,13 @@ fn main() {
             let tray = if capture.is_some() {
                 None
             } else {
-                tray::Tray::new(&cc.egui_ctx, app_ctl.clone())
+                match tray::Tray::new(&cc.egui_ctx, app_ctl.clone()) {
+                    Ok(tray) => Some(tray),
+                    Err(e) => {
+                        app_ctl.lock().unwrap().log(format!("No tray icon: {e}"));
+                        None
+                    }
+                }
             };
             if tray.is_none() && start_hidden {
                 cc.egui_ctx

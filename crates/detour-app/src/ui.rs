@@ -802,17 +802,18 @@ impl DetourApp {
 
             bubble(ui, |ui| {
                 ui.label(RichText::new("General").font(medium(15.0)));
+                let place = if cfg!(target_os = "macos") { "menu bar" } else { "tray" };
                 let mut changed = false;
                 divider(ui);
                 row(ui, "Connect when Detour opens", "Protection starts by itself", |ui| {
                     changed |= toggle(ui, &mut ctl.settings.auto_enable).changed();
                 });
                 divider(ui);
-                row(ui, "Keep running in the tray", "Closing the window hides it instead of quitting", |ui| {
+                row(ui, &format!("Keep running in the {place}"), "Closing the window hides it instead of quitting", |ui| {
                     changed |= toggle(ui, &mut ctl.settings.close_to_tray).changed();
                 });
                 divider(ui);
-                row(ui, "Start at login", "Opens hidden in the tray when you sign in", |ui| {
+                row(ui, "Start at login", &format!("Opens hidden in the {place} when you sign in"), |ui| {
                     if toggle(ui, &mut self.autostart).changed() {
                         self.settings_error = sys::set_autostart(self.autostart, &self.exe).err();
                         if self.settings_error.is_some() {
