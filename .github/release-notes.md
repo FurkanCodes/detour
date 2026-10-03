@@ -11,10 +11,8 @@ The builds are not code-signed yet, so Windows SmartScreen also warns on first l
 
 ## What's new
 
-- **macOS: menu bar icon.** Detour now shows a shield in the menu bar (solid when connected, faded when off), readable on light and dark menu bars. Click it to turn Detour on or off, open the window or quit; with *Keep running in the menu bar* on, closing the window leaves it running there.
-- **Windows now works like a proxy-based bypass for browsers.** A local proxy is set as the system proxy while Detour is on, alongside the packet engine for apps that ignore proxies.
-- **Turning Detour off cuts everything it was carrying at once**, and turning it on again works immediately. Browsers no longer keep poisoned DNS answers or stale connections across a toggle.
-- Your own proxy settings are saved and restored, with a logon safety net if Windows shuts down or Detour is killed while connected.
-- The proxy keeps handshakes split even when a browser opens a connection long before using it, and falls back to encrypted DNS when the provider resolver has no answer for a name.
+- **macOS: native window.** Detour now uses the standard macOS title bar with the traffic-light buttons, rounded corners and native resizing, with Detour's own title row drawn beneath it.
+- **macOS: minimize to the menu bar.** The yellow button tucks Detour away in the menu bar (and removes the Dock icon) when the menu bar icon is available. Open it again from the menu bar icon.
+- Windows is unchanged and keeps its custom window.
 
 See the [README](https://github.com/FurkanCodes/detour#readme) for how it works and the FAQ.
