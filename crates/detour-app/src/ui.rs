@@ -43,6 +43,8 @@ const AVATARS: [Color32; 5] = [
 
 const WINDOW_RADIUS: u8 = 22;
 const TITLE_H: f32 = 44.0;
+/// macOS draws the window frame, corners and traffic lights itself.
+const NATIVE_CHROME: bool = cfg!(target_os = "macos");
 const NAV_W: f32 = 84.0;
 const CARDS_W: f32 = 252.0;
 
@@ -194,6 +196,7 @@ impl eframe::App for DetourApp {
             }
         }
         if sys::take_show_request() {
+            sys::show_in_dock(true);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -212,6 +215,7 @@ impl eframe::App for DetourApp {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            sys::show_in_dock(false);
         }
 
         // Measurements: apply finished ones, and keep latency fresh while visible.
@@ -233,7 +237,7 @@ impl eframe::App for DetourApp {
 
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let full = ui.max_rect();
-        let radius = if maximized { 0 } else { WINDOW_RADIUS };
+        let radius = if maximized || NATIVE_CHROME { 0 } else { WINDOW_RADIUS };
         sys::round_window(
             (f32::from(WINDOW_RADIUS) * ctx.pixels_per_point()).round() as i32,
             !maximized,
@@ -246,8 +250,10 @@ impl eframe::App for DetourApp {
             full
         };
         ui.painter().rect_filled(frame, CornerRadius::same(radius), WIN_BG);
-        ui.painter()
-            .rect_stroke(frame, CornerRadius::same(radius), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+        if !NATIVE_CHROME {
+            ui.painter()
+                .rect_stroke(frame, CornerRadius::same(radius), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+        }
 
         let title = Rect::from_min_size(full.min, vec2(full.width(), TITLE_H));
         self.title_bar(ui, title, maximized);
@@ -270,7 +276,7 @@ impl eframe::App for DetourApp {
         }
         self.nav(ui, body, &ctl);
 
-        if !maximized {
+        if !maximized && !NATIVE_CHROME {
             resize_edges(ui, full);
         }
 
@@ -289,13 +295,9 @@ impl eframe::App for DetourApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        // macOS composites the transparent window; on Windows the corners are
-        // cut off by a window region, so the background is simply opaque.
-        if cfg!(target_os = "macos") {
-            [0.0, 0.0, 0.0, 0.0]
-        } else {
-            WIN_BG.to_normalized_gamma_f32()
-        }
+        // The corners are cut off by the system on macOS and by a window
+        // region on Windows, so the background is simply opaque.
+        WIN_BG.to_normalized_gamma_f32()
     }
 }
 
@@ -309,7 +311,9 @@ impl DetourApp {
         if drag.double_clicked() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         }
-        let logo = Rect::from_center_size(pos2(rect.left() + 38.0, rect.center().y), vec2(26.0, 26.0));
+        // On macOS the traffic lights take the top-left corner.
+        let logo_x = if NATIVE_CHROME { 100.0 } else { 38.0 };
+        let logo = Rect::from_center_size(pos2(rect.left() + logo_x, rect.center().y), vec2(26.0, 26.0));
         ui.painter().image(
             self.logo.id(),
             logo,
@@ -323,6 +327,9 @@ impl DetourApp {
             bold(16.0),
             TEXT,
         );
+        if NATIVE_CHROME {
+            return;
+        }
 
         let size = vec2(38.0, 28.0);
         let mut x = rect.right() - 16.0 - size.x;

@@ -78,6 +78,18 @@ pub fn local_hms() -> String {
     format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
+#[cfg(target_os = "macos")]
+#[path = "macos_window.rs"]
+mod window;
+#[cfg(target_os = "macos")]
+pub use window::{setup as setup_window, show_in_dock};
+
+#[cfg(not(target_os = "macos"))]
+pub fn setup_window(_window: &eframe::CreationContext, _minimize_to_menu_bar: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn show_in_dock(_show: bool) {}
+
 /// Windows clips its borderless window to rounded corners itself; macOS
 /// composites the transparent window correctly, so nothing to do here.
 pub fn round_window(_radius_px: i32, _rounded: bool) {}

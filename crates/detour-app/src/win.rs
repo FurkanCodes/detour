@@ -69,6 +69,12 @@ pub fn listen_for_show_requests(on_request: impl Fn() + Send + 'static) {
 static LAST_SHAPE: AtomicU64 = AtomicU64::new(0);
 static STYLED: AtomicBool = AtomicBool::new(false);
 
+/// Native window chrome is a macOS thing; Windows draws its own title bar.
+pub fn setup_window(_window: &eframe::CreationContext, _minimize_to_menu_bar: bool) {}
+
+/// macOS only: Windows always shows the taskbar button while the window is open.
+pub fn show_in_dock(_show: bool) {}
+
 /// Clips the borderless window to a rounded rectangle (or removes the clip
 /// when `rounded` is false, e.g. maximized). Transparent windows draw the
 /// area outside the corners black on some systems; a window region cuts the

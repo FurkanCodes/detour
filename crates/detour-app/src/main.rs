@@ -118,15 +118,25 @@ fn main() {
         width: 64,
         height: 64,
     };
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("Detour")
+        .with_inner_size([1120.0, 740.0])
+        .with_min_inner_size([940.0, 640.0])
+        .with_icon(icon)
+        .with_visible(!start_hidden);
+    // macOS keeps its native title bar (traffic lights, resizing, rounded
+    // corners) but lets Detour draw underneath it; Windows gets a fully
+    // custom borderless window.
+    let viewport = if cfg!(target_os = "macos") {
+        viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+    } else {
+        viewport.with_decorations(false)
+    };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Detour")
-            .with_inner_size([1120.0, 740.0])
-            .with_min_inner_size([940.0, 640.0])
-            .with_decorations(false)
-            .with_transparent(cfg!(target_os = "macos"))
-            .with_icon(icon)
-            .with_visible(!start_hidden),
+        viewport,
         ..Default::default()
     };
 
@@ -151,9 +161,17 @@ fn main() {
                     }
                 }
             };
-            if tray.is_none() && start_hidden {
-                cc.egui_ctx
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            if capture.is_none() {
+                // Minimizing to the menu bar only makes sense with an icon there.
+                sys::setup_window(cc, tray.is_some());
+            }
+            if start_hidden {
+                if tray.is_some() {
+                    sys::show_in_dock(false);
+                } else {
+                    cc.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                }
             }
             let mut app = ui::DetourApp::new(&cc.egui_ctx, app_ctl, exe, tray);
             if let Some(path) = capture {
