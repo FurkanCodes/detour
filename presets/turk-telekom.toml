@@ -1,0 +1,13 @@
+name = "Türk Telekom"
+description = "Splits the TLS ClientHello behind a decoy that expires after 4 hops, and resolves domains through Yandex DNS (port 1253), which bypasses Türk Telekom's DNS poisoning."
+lists = ["discord", "roblox", "custom"]
+
+[engine]
+path = "detour-engine.exe"
+args = [
+    "--hostlist={hostlist}",
+    "--tlsrec=sni+1",
+    "--split-pos=1,sni+1",
+    "--fake-ttl=4",
+    "--dns-redirect=77.88.8.8:1253",
+]

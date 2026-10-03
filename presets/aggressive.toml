@@ -1,0 +1,14 @@
+name = "Aggressive"
+description = "Everything at once: split, reorder, a decoy ClientHello that expires after 4 hops, and DNS redirect. Try this if the other presets do not work."
+lists = ["discord", "roblox", "custom"]
+
+[engine]
+path = "detour-engine.exe"
+args = [
+    "--hostlist={hostlist}",
+    "--tlsrec=sni+1",
+    "--split-pos=2,sni+2",
+    "--disorder",
+    "--fake-ttl=4",
+    "--dns-redirect=1.1.1.1",
+]

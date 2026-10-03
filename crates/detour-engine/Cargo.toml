@@ -1,0 +1,20 @@
+[package]
+name = "detour-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "detour_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "detour-engine"
+path = "src/main.rs"
+
+[dependencies]
+detour-core = { path = "../detour-core" }
+
+[target.'cfg(windows)'.dependencies]
+crossbeam-channel = "0.5"
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinHttp"] }

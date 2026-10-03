@@ -1,0 +1,12 @@
+name = "Generic (SNI split only)"
+description = "No DNS changes; sends the TLS ClientHello in two-byte packets. For ISPs that filter by SNI but do not poison DNS."
+lists = ["discord", "roblox", "custom"]
+
+[engine]
+path = "detour-engine.exe"
+args = [
+    "--hostlist={hostlist}",
+    "--tlsrec=sni+1",
+    "--split-pos=1,sni+1",
+    "--chunk-size=2",
+]

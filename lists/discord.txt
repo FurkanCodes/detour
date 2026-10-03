@@ -1,0 +1,14 @@
+# Discord (app, CDN, voice signalling, updater)
+discord.com
+discord.gg
+discord.co
+discord.dev
+discord.new
+discord.gift
+discord.media
+discordapp.com
+discordapp.net
+discordcdn.com
+discordstatus.com
+dis.gd
+updates.discord.com

@@ -1,0 +1,10 @@
+[package]
+name = "detour-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+detour-core = { path = "../detour-core" }
+thiserror.workspace = true
+windows-service = "0.8"

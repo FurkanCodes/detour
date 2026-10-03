@@ -1,0 +1,8 @@
+# Roblox (site, CDN, telemetry, captcha)
+roblox.com
+rbxcdn.com
+rbxinfra.net
+rbxtrk.com
+roblox.cn
+robloxlabs.com
+arkoselabs.com

@@ -1,0 +1,13 @@
+name = "Superonline"
+description = "Sends the TLS ClientHello one byte per packet and resolves domains through Yandex DNS (port 1253)."
+lists = ["discord", "roblox", "custom"]
+
+[engine]
+path = "detour-engine.exe"
+args = [
+    "--hostlist={hostlist}",
+    "--tlsrec=sni+1",
+    "--split-pos=2,sni+2",
+    "--chunk-size=1",
+    "--dns-redirect=77.88.8.8:1253",
+]

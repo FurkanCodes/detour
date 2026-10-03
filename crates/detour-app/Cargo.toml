@@ -1,0 +1,39 @@
+[package]
+name = "detour-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "detour-app"
+path = "src/main.rs"
+
+[dependencies]
+detour-core = { path = "../detour-core" }
+detour-engine = { path = "../detour-engine" }
+serde.workspace = true
+toml.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
+tray-icon = { version = "0.26", default-features = false }
+egui-phosphor = { version = "0.14", default-features = false, features = ["regular", "fill"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_WinInet",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+embed-resource = "3"

@@ -1,0 +1,2 @@
+# Your own domains, one per line. Subdomains match automatically.
+# Manage with: detour list add example.com
