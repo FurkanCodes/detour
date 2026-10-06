@@ -38,9 +38,11 @@ impl Engine {
         hosts: Option<DomainList>,
         log: LogFn,
     ) -> Result<Engine, String> {
-        if opts.strategy.split.is_empty()
-            && opts.strategy.chunk_size.is_none()
-            && opts.strategy.fake_ttl.is_none()
+        let rewrites_tcp = !opts.ports.is_empty()
+            && (!opts.strategy.split.is_empty()
+                || opts.strategy.chunk_size.is_some()
+                || opts.strategy.fake_ttl.is_some());
+        if !rewrites_tcp
             && opts.dns_redirect.is_none()
             && opts.doh.is_none()
             && !opts.block_quic
@@ -113,36 +115,41 @@ impl Drop for Engine {
     }
 }
 
+/// The WinDivert filter for `opts`. No ports means no TCP is captured: only
+/// DNS (and UDP/443, when blocked) is.
 pub fn filter(opts: &Options) -> String {
-    let ports = opts
-        .ports
-        .iter()
-        .map(|p| format!("tcp.DstPort == {p}"))
-        .collect::<Vec<_>>()
-        .join(" or ");
-    // ClientHello: TLS handshake record (0x16) carrying handshake type 1.
-    let mut f = format!(
-        "(outbound and ({ports}) and tcp.PayloadLength > 5 and tcp.Payload[0] == 22 and tcp.Payload[5] == 1)"
-    );
+    let mut parts = Vec::new();
+    if !opts.ports.is_empty() {
+        let ports = opts
+            .ports
+            .iter()
+            .map(|p| format!("tcp.DstPort == {p}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        // ClientHello: TLS handshake record (0x16) carrying handshake type 1.
+        parts.push(format!(
+            "(outbound and ({ports}) and tcp.PayloadLength > 5 and tcp.Payload[0] == 22 and tcp.Payload[5] == 1)"
+        ));
+    }
     if opts.ports.contains(&80) {
-        f.push_str(" or (outbound and tcp.DstPort == 80 and tcp.PayloadLength > 16 and (tcp.Payload[0] == 71 or tcp.Payload[0] == 80 or tcp.Payload[0] == 72 or tcp.Payload[0] == 68 or tcp.Payload[0] == 79 or tcp.Payload[0] == 67 or tcp.Payload[0] == 84))");
+        parts.push("(outbound and tcp.DstPort == 80 and tcp.PayloadLength > 16 and (tcp.Payload[0] == 71 or tcp.Payload[0] == 80 or tcp.Payload[0] == 72 or tcp.Payload[0] == 68 or tcp.Payload[0] == 79 or tcp.Payload[0] == 67 or tcp.Payload[0] == 84))".into());
     }
     if opts.doh.is_some() || opts.dns_redirect.is_some() {
-        f.push_str(" or (outbound and udp.DstPort == 53)");
+        parts.push("(outbound and udp.DstPort == 53)".into());
     }
     // The plain redirect also serves as the DoH fallback, so its answers
     // are captured in both modes.
     if let Some(r) = &opts.dns_redirect {
-        f.push_str(&format!(
-            " or (inbound and ip and udp.SrcPort == {} and ip.SrcAddr == {})",
+        parts.push(format!(
+            "(inbound and ip and udp.SrcPort == {} and ip.SrcAddr == {})",
             r.port(),
             r.ip()
         ));
     }
     if opts.block_quic {
-        f.push_str(" or (outbound and udp.DstPort == 443)");
+        parts.push("(outbound and udp.DstPort == 443)".into());
     }
-    format!("!impostor and ({f})")
+    format!("!impostor and ({})", parts.join(" or "))
 }
 
 fn packet_loop(
@@ -280,6 +287,10 @@ mod tests {
         .unwrap();
         api.validate_filter(&filter(&all))
             .expect("system-wide filter is valid");
+        let mut dns_only = all.clone();
+        dns_only.ports.clear();
+        api.validate_filter(&filter(&dns_only))
+            .expect("DNS-only filter is valid");
         let opts = Options::parse(["--ports=1"]).unwrap().unwrap();
         let mut engine = Engine::start(&api, opts, Some(DomainList::new()), Arc::new(|_| {}))
             .expect("start engine");
@@ -313,5 +324,10 @@ mod tests {
             doh.contains("udp.SrcPort == 1253 and ip.SrcAddr == 77.88.8.8"),
             "the DoH fallback's answers must be captured"
         );
+        let mut dns_only = o.clone();
+        dns_only.ports.clear();
+        let f = filter(&dns_only);
+        assert!(!f.contains("tcp"), "{f}");
+        assert!(f.starts_with("!impostor and ((outbound and udp.DstPort == 53)"), "{f}");
     }
 }

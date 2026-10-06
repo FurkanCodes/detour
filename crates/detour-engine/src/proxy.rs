@@ -22,8 +22,13 @@ use std::time::Duration;
 
 const MAX_CONNECTIONS: usize = 2048;
 const MAX_HEAD: usize = 16 * 1024;
-const MAX_PIECES: usize = 16;
+/// Splits with fewer pieces than this pause between them.
+const MAX_PAUSED_PIECES: usize = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A host's addresses are tried in a staggered race: the next one starts if
+/// the previous has not connected within this time (RFC 8305's default).
+const DIAL_STAGGER: Duration = Duration::from_millis(250);
+const MAX_DIALS: usize = 8;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the rest of a TLS record that arrived in pieces.
 const RECORD_TIMEOUT: Duration = Duration::from_millis(250);
@@ -47,15 +52,33 @@ pub struct ProxyConfig {
     pub strategy: Strategy,
     /// `None` means every host.
     pub hosts: Option<DomainList>,
-    /// Plain-UDP resolver for covered hosts; `None` uses the system resolver.
-    pub resolver: Option<SocketAddrV4>,
-    /// Asked when `resolver` gives no address: some resolvers answer a name
-    /// they cannot place (steered CDN names, for one) with nothing at all.
-    pub fallback: Option<ResolveFn>,
+    /// Clean resolvers for covered hosts, asked in order until one gives an
+    /// address (some answer a name they cannot place, steered CDN names for
+    /// one, with nothing at all). If every one fails the connection fails:
+    /// the system resolver would hand back the provider's block page, which
+    /// the browser shows as a certificate error. Empty: the system resolver.
+    pub resolvers: Vec<Resolver>,
     /// Pause between the pieces of a split write, so each leaves in its own
     /// TCP segment.
     pub piece_delay: Duration,
     pub verbose: bool,
+}
+
+#[derive(Clone)]
+pub struct Resolver {
+    /// Shown in detailed logs.
+    pub name: String,
+    pub lookup: ResolveFn,
+}
+
+impl Resolver {
+    /// Plain DNS over UDP.
+    pub fn udp(server: SocketAddrV4) -> Self {
+        Resolver {
+            name: server.to_string(),
+            lookup: Arc::new(move |host| dnsclient::resolve_a(server, host)),
+        }
+    }
 }
 
 impl ProxyConfig {
@@ -65,8 +88,7 @@ impl ProxyConfig {
         ProxyConfig {
             strategy: opts.strategy.clone(),
             hosts,
-            resolver: opts.dns_redirect,
-            fallback: None,
+            resolvers: opts.dns_redirect.map(Resolver::udp).into_iter().collect(),
             piece_delay: Duration::from_millis(3),
             verbose: opts.verbose,
         }
@@ -378,39 +400,78 @@ fn split_host_port(authority: &str, default: u16) -> io::Result<(String, u16)> {
 }
 
 fn connect_target(host: &str, port: u16, shared: &Shared) -> io::Result<TcpStream> {
+    let covered = shared.cfg.hosts.as_ref().is_none_or(|h| h.matches(host));
     let candidates: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
-    } else if let Some(server) = shared
-        .cfg
-        .resolver
-        .filter(|_| shared.cfg.hosts.as_ref().is_none_or(|h| h.matches(host)))
-    {
-        let clean = dnsclient::resolve_a(server, host).or_else(|first| {
-            let ips = shared.cfg.fallback.as_ref().and_then(|f| f(host).ok());
-            ips.filter(|ips| !ips.is_empty()).ok_or(first)
-        });
-        match clean {
-            Ok(ips) => {
-                shared.stats.dns.fetch_add(1, Ordering::Relaxed);
-                if shared.cfg.verbose {
-                    (shared.log)(format!("DNS {host} -> {server}"));
+    } else if covered && !shared.cfg.resolvers.is_empty() {
+        let mut last = io::Error::other(format!("cannot resolve {host}"));
+        let mut found = None;
+        for r in &shared.cfg.resolvers {
+            match (r.lookup)(host) {
+                Ok(ips) if !ips.is_empty() => {
+                    found = Some((ips, &r.name));
+                    break;
                 }
-                ips.into_iter().map(|ip| SocketAddr::new(ip.into(), port)).collect()
+                Ok(_) => last = io::Error::other(format!("{} has no address for {host}", r.name)),
+                Err(e) => last = e,
             }
-            // The resolver may be unreachable on some networks; the system
-            // resolver is better than failing outright.
-            Err(_) => (host, port).to_socket_addrs()?.collect(),
         }
+        let (ips, name) = found.ok_or(last)?;
+        shared.stats.dns.fetch_add(1, Ordering::Relaxed);
+        if shared.cfg.verbose {
+            (shared.log)(format!("DNS {host} -> {name}"));
+        }
+        ips.into_iter().map(|ip| SocketAddr::new(ip.into(), port)).collect()
     } else {
         (host, port).to_socket_addrs()?.collect()
     };
 
-    let mut last = io::Error::other(format!("cannot resolve {host}"));
-    for addr in candidates {
-        match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
-            Ok(s) => return Ok(s),
+    if candidates.is_empty() {
+        return Err(io::Error::other(format!("cannot resolve {host}")));
+    }
+    connect_fastest(&candidates)
+}
+
+/// Connects to whichever address answers first. An address the provider
+/// blackholes costs a quarter second instead of the whole connect timeout.
+fn connect_fastest(addrs: &[SocketAddr]) -> io::Result<TcpStream> {
+    let addrs = &addrs[..addrs.len().min(MAX_DIALS)];
+    if let [only] = addrs {
+        return TcpStream::connect_timeout(only, CONNECT_TIMEOUT);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut last = io::Error::other("no address could be reached");
+    let mut pending = 0;
+    for (i, addr) in addrs.iter().copied().enumerate() {
+        if i > 0 {
+            match rx.recv_timeout(DIAL_STAGGER) {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(e)) => {
+                    pending -= 1;
+                    last = e;
+                }
+                Err(_) => {}
+            }
+        }
+        let tx = tx.clone();
+        // Losers finish on their own; a late success is dropped (closed)
+        // because nobody receives it any more.
+        let spawned = std::thread::Builder::new()
+            .name("detour-dial".into())
+            .spawn(move || drop(tx.send(TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT))));
+        match spawned {
+            Ok(_) => pending += 1,
             Err(e) => last = e,
         }
+    }
+    drop(tx);
+    while pending > 0 {
+        match rx.recv() {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(e)) => last = e,
+            Err(_) => break,
+        }
+        pending -= 1;
     }
     Err(last)
 }
@@ -442,7 +503,6 @@ fn send_first(server: &mut TcpStream, data: &[u8], shared: &Shared, tunnel: bool
         }
         (None, None) => return server.write_all(data),
     };
-    cuts.truncate(MAX_PIECES);
     let rewritten;
     let data = match record_at.and_then(|at| crate::tls::split_record(data, at).map(|d| (at, d))) {
         Some((at, split)) => {
@@ -472,12 +532,15 @@ fn send_first(server: &mut TcpStream, data: &[u8], shared: &Shared, tunnel: bool
             cuts.len() + 1
         ));
     }
+    // A few pieces get a short pause each so they cannot merge into one
+    // segment. Hundreds of pieces (chunk mode) go back to back, as SpoofDPI
+    // sends them: with Nagle off each write still leaves as its own segment.
+    let delay = if cuts.len() < MAX_PAUSED_PIECES { shared.cfg.piece_delay } else { Duration::ZERO };
     let mut start = 0;
     for end in cuts.into_iter().chain([data.len()]) {
         server.write_all(&data[start..end])?;
-        server.flush()?;
-        if end < data.len() {
-            std::thread::sleep(shared.cfg.piece_delay);
+        if end < data.len() && !delay.is_zero() {
+            std::thread::sleep(delay);
         }
         start = end;
     }
@@ -559,8 +622,7 @@ mod tests {
         ProxyConfig {
             strategy: Strategy::default(),
             hosts: None,
-            resolver: None,
-            fallback: None,
+            resolvers: Vec::new(),
             piece_delay: Duration::from_millis(delay_ms),
             verbose: false,
         }
@@ -836,22 +898,28 @@ mod tests {
     }
 
     #[test]
-    fn fallback_resolver_is_asked_when_the_resolver_gives_no_address() {
+    fn next_resolver_is_asked_when_one_gives_no_address() {
         let (port, server) = recording_server(5);
         let asked = Arc::new(Mutex::new(Vec::new()));
         let mut cfg = config(1);
         // Nothing listens on this UDP port, so the first lookup fails.
         let dead = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        cfg.resolver = Some(match dead.local_addr().unwrap() {
+        let dead_addr = match dead.local_addr().unwrap() {
             SocketAddr::V4(a) => a,
             SocketAddr::V6(_) => unreachable!(),
-        });
+        };
         drop(dead);
         let seen = asked.clone();
-        cfg.fallback = Some(Arc::new(move |name: &str| {
-            seen.lock().unwrap().push(name.to_owned());
-            Ok(vec![Ipv4Addr::LOCALHOST])
-        }));
+        cfg.resolvers = vec![
+            Resolver::udp(dead_addr),
+            Resolver {
+                name: "second".into(),
+                lookup: Arc::new(move |name: &str| {
+                    seen.lock().unwrap().push(name.to_owned());
+                    Ok(vec![Ipv4Addr::LOCALHOST])
+                }),
+            },
+        ];
         let mut p = proxy(cfg);
 
         let mut c = TcpStream::connect(p.addr()).unwrap();
@@ -866,6 +934,42 @@ mod tests {
         assert_eq!(&pong, b"pong");
         assert_eq!(server.join().unwrap().concat(), b"hello");
         assert_eq!(*asked.lock().unwrap(), ["steered.example"]);
+        p.stop();
+    }
+
+    #[test]
+    fn never_falls_back_to_the_system_resolver() {
+        // "localhost" resolves through the system, so reaching the target
+        // would mean the proxy fell back to it.
+        let (port, _server) = recording_server(1);
+        let mut cfg = config(1);
+        cfg.resolvers = vec![Resolver {
+            name: "down".into(),
+            lookup: Arc::new(|_: &str| Err(io::Error::other("unreachable"))),
+        }];
+        let mut p = proxy(cfg);
+        let mut c = TcpStream::connect(p.addr()).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c.write_all(format!("CONNECT localhost:{port} HTTP/1.1\r\n\r\n").as_bytes()).unwrap();
+        let mut reply = String::new();
+        let _ = c.read_to_string(&mut reply);
+        assert!(reply.starts_with("HTTP/1.1 502"), "{reply}");
+        p.stop();
+    }
+
+    #[test]
+    fn chunk_mode_relays_the_whole_hello_intact() {
+        let hello = crate::tls::build_client_hello("discord.com");
+        let (port, server) = recording_server(hello.len());
+        let mut cfg = config(0);
+        cfg.strategy.stream = crate::StreamSplit::Chunk(1);
+        let mut p = proxy(cfg);
+        let mut c = open_tunnel(&p, port);
+        c.write_all(&hello).unwrap();
+        let mut pong = [0u8; 4];
+        c.read_exact(&mut pong).unwrap();
+        assert_eq!(server.join().unwrap().concat(), hello);
+        assert_eq!(p.stats.tls.load(Ordering::Relaxed), 1);
         p.stop();
     }
 

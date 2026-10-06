@@ -256,14 +256,34 @@ pub fn decode_wininet(text: &str) -> WinInetSaved {
     saved
 }
 
-/// Hosts the browser should reach directly: local and private addresses,
-/// plus game launchers and CDNs that need no help and only add load to the
-/// proxy.
+/// Hosts the browser should reach directly (BypaxDPI's list): local and
+/// private addresses, connectivity checks (or Windows shows "no internet"),
+/// Windows Update, and game launchers and CDNs that need no help and whose
+/// HTTP clients may not cope with a split handshake.
 pub fn windows_bypass_list() -> String {
     let private_172: Vec<String> = (16..=31).map(|n| format!("172.{n}.*")).collect();
     let mut hosts: Vec<&str> = vec!["<local>", "localhost", "127.*", "10.*", "192.168.*"];
     hosts.extend(private_172.iter().map(String::as_str));
     hosts.extend([
+        "*.msftconnecttest.com",
+        "*.msftncsi.com",
+        "dns.msn.com",
+        "ipv6.msftconnecttest.com",
+        "connectivitycheck.gstatic.com",
+        "connectivitycheck.android.com",
+        "clients3.google.com",
+        "play.googleapis.com",
+        "captive.apple.com",
+        "gsp1.apple.com",
+        "connectivitycheck.samsung.com",
+        "*.windowsupdate.com",
+        "*.delivery.mp.microsoft.com",
+        "*.steamcontent.com",
+        "*.steamstatic.com",
+        "clientconfig.akamai.steamstatic.com",
+        "*.cm.steampowered.com",
+        "*.epicgames.com",
+        "*.unrealengine.com",
         "download.epicgames.com",
         "launcher-public-service-prod06.ol.epicgames.com",
         "*.riotgames.com",
@@ -282,6 +302,75 @@ pub fn windows_bypass_list() -> String {
         "*.cachefly.net",
     ]);
     hosts.join(";")
+}
+
+/// The bypass list BypaxDPI gives the WinHTTP proxy (system services and
+/// native programs): shorter than the browser one.
+pub fn winhttp_bypass_list() -> String {
+    [
+        "<local>",
+        "127.0.0.1",
+        "*.steamcontent.com",
+        "*.steamstatic.com",
+        "*.cm.steampowered.com",
+        "*.epicgames.com",
+        "*.unrealengine.com",
+        "*.riotgames.com",
+        "*.leagueoflegends.com",
+        "*.ea.com",
+        "*.origin.com",
+        "*.blizzard.com",
+        "*.battle.net",
+        "*.ubisoft.com",
+        "*.ubi.com",
+        "*.xboxlive.com",
+        "*.xbox.com",
+        "*.microsoft.com",
+        "*.cachefly.net",
+        "*.msftconnecttest.com",
+        "*.windowsupdate.com",
+    ]
+    .join(";")
+}
+
+pub fn winhttp_backup_path(dir: &Path) -> PathBuf {
+    dir.join("winhttp-proxy-backup.txt")
+}
+
+/// The saved `WinHttpSettings` value of each registry view (Windows keeps a
+/// 64-bit and a 32-bit copy, each with its own change counter), one line
+/// each as hex; `none` where there was none.
+pub fn encode_winhttp(views: &[Option<Vec<u8>>]) -> String {
+    let line = |v: &Option<Vec<u8>>| match v {
+        Some(bytes) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        None => "none".to_owned(),
+    };
+    views.iter().map(|v| line(v) + "\n").collect()
+}
+
+/// `Err` for a damaged backup.
+pub fn decode_winhttp(text: &str) -> Result<Vec<Option<Vec<u8>>>, ()> {
+    let views: Vec<Option<Vec<u8>>> = text
+        .lines()
+        .map(|line| {
+            let line = line.trim();
+            if line == "none" {
+                return Ok(None);
+            }
+            if line.is_empty() || line.len() % 2 != 0 {
+                return Err(());
+            }
+            (0..line.len())
+                .step_by(2)
+                .map(|i| line.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()).ok_or(()))
+                .collect::<Result<Vec<u8>, ()>>()
+                .map(Some)
+        })
+        .collect::<Result<_, ()>>()?;
+    if views.is_empty() {
+        return Err(());
+    }
+    Ok(views)
 }
 
 const INTERNET_SETTINGS_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
@@ -424,6 +513,21 @@ mod tests {
         }
         assert!(!hosts.contains(&"172.32.*"));
         assert!(!hosts.iter().any(|h| h.contains("discord") || h.contains("roblox")));
+        assert!(hosts.contains(&"*.msftconnecttest.com"), "connectivity checks go direct");
+        let winhttp = winhttp_bypass_list();
+        assert!(winhttp.starts_with("<local>;127.0.0.1;"));
+        assert!(!winhttp.contains("discord") && !winhttp.contains("roblox"));
+    }
+
+    #[test]
+    fn winhttp_backup_round_trips() {
+        let views = vec![Some(vec![0x28u8, 0, 0, 0, 3, 0xab]), Some(vec![0x18u8, 0, 0, 0, 3, 0xab])];
+        assert_eq!(decode_winhttp(&encode_winhttp(&views)), Ok(views));
+        let mixed = vec![Some(vec![1u8]), None];
+        assert_eq!(decode_winhttp(&encode_winhttp(&mixed)), Ok(mixed));
+        assert_eq!(decode_winhttp("abc\n"), Err(()));
+        assert_eq!(decode_winhttp("zz\nnone\n"), Err(()));
+        assert_eq!(decode_winhttp(""), Err(()));
     }
 
     #[test]

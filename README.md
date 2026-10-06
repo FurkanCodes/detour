@@ -26,6 +26,10 @@ each connection look, so filters that read the site name miss it.
   when the default is not enough.
 - **DNS that is not poisoned.** The provider's clean resolver, Cloudflare, Google or Quad9,
   optionally over HTTPS.
+- **Optional WARP tunnel (Windows)** for when the default method is not enough: Discord and
+  Roblox, voice included, go through a free Cloudflare WARP tunnel, the way
+  [SplitWire-Turkey](https://github.com/cagritaskn/SplitWire-Turkey) does it. See
+  [WARP method](#warp-method-windows).
 - **Live checks:** latency, a site check that loads your sites once after connecting, and
   a speed test you start yourself.
 - Tray icon (menu bar icon on macOS), start at login, connect on launch. No telemetry and no account.
@@ -76,34 +80,57 @@ Many ISPs block sites by reading the hostname (the SNI) in the first packet of a
 connection, and by answering DNS lookups for those names with a fake address. Detour does
 two things about that:
 
-1. **It looks names up through a resolver your ISP does not control**, so the real address
-   comes back.
-2. **It sends the start of each connection in pieces**, cutting the TLS handshake so the
-   hostname is never in one packet. The server reassembles it; a filter that matches on the
-   name misses it. Some profiles also send a decoy handshake that expires before it reaches
-   the server.
+1. **It looks names up through a resolver your ISP does not control**: Cloudflare over HTTPS
+   by default, so the real address comes back.
+2. **It sends the start of each connection in pieces**: the whole TLS handshake goes out one
+   byte per packet, the way [BypaxDPI](https://github.com/BypaxDPI/BypaxDPI-Windows) does it,
+   so the hostname is never in one packet. The server reassembles it; a filter that matches
+   on the name misses it. Only the packet boundaries change, never the bytes, so sites that
+   refuse unusual handshakes (many Turkish banks and e-Devlet) still work.
 
 Nothing is relayed: your traffic goes directly to the site.
 
 ### Windows
 
-Detour runs two parts side by side:
+Detour works like BypaxDPI: a **local proxy**, set as the Windows system proxy (and the
+WinHTTP proxy that system services and native programs read) while Detour is on. Browsers
+and other proxy-aware apps use it. It resolves names itself, so a poisoned DNS answer a
+browser cached earlier cannot break a site, and switching Detour off cuts every connection
+that went through it. Connectivity checks, Windows Update and game launchers stay direct.
 
-- a **local proxy**, set as the Windows system proxy while Detour is on. Browsers and other
-  proxy-aware apps use it. It resolves names itself, so a poisoned DNS answer a browser
-  cached earlier cannot break a site, and switching Detour off cuts every connection that
-  went through it;
-- a **packet engine** ([WinDivert](https://reactos.org/wdk/windivert/), signed driver
-  embedded in the app) for programs that ignore the system proxy, such as games and
-  desktop clients.
-
-Your own proxy settings are saved first and restored when you disconnect. If Windows shuts
+Your own proxy settings (both kinds) are saved first and restored when you disconnect. If Windows shuts
 down or Detour is killed while connected, a one-time logon task puts them back, and Detour
 also repairs them the next time it starts.
 
 On first connect Detour also exempts your installed Microsoft Store apps from Windows'
 loopback restriction, because otherwise they cannot reach a proxy on `127.0.0.1` while it
 is set. This is a one-time change.
+
+### WARP method (Windows)
+
+Settings → *Connection method* → **WARP tunnel** is an alternative for when reshaping the
+handshake is not enough, for example when a provider blocks by IP address or a voice
+connection will not start. Discord and Roblox then go through a free
+[Cloudflare WARP](https://one.one.one.one/) tunnel, voice included. *Tunnel browsers too*
+adds the browsers. Everything else stays on the Detour method. In this mode a packet engine
+([WinDivert](https://reactos.org/wdk/windivert/), signed driver embedded in the app) also
+fixes DNS for the tunnelled programs.
+
+This is a tunnel: tunnelled apps show a Cloudflare IP address. Detour does not run it
+itself. The first connect:
+
+1. downloads and silently installs [WireSock Secure Connect](https://www.wiresock.net/)
+   3.6.1.1, which runs the tunnel for chosen programs only. It is free for personal and
+   non-profit use ([licence](https://www.wiresock.net/license/wiresock_eula)) and installs
+   its own driver and two services;
+2. downloads [wgcf](https://github.com/ViRb3/wgcf) 2.3.0 and uses it to register a free
+   WARP device.
+
+Both downloads are checked against pinned SHA-256 checksums before they run. Later connects
+take a few seconds. Disconnecting takes the tunnel down, and if Detour is killed while
+connected, it takes the tunnel down the next time it starts. A fresh WireSock install
+sometimes needs a Windows restart before its service starts; Detour says so when that
+happens.
 
 ### macOS
 
@@ -113,12 +140,14 @@ follow the system proxy settings, which includes the major browsers. macOS asks 
 administrator password when it needs one, and your previous proxy settings are restored on
 disconnect. Detour also puts a shield icon in the menu bar (solid when connected, faded when
 off); click it to turn Detour on or off, open the window or quit. With *Keep running in the
-menu bar* on, closing the window leaves Detour running there. The packet-level options (decoy handshake, encrypted DNS toggle, HTTP/3
-fallback) are Windows-only.
+menu bar* on, closing the window leaves Detour running there. The encrypted DNS toggle and
+the WARP method are Windows-only.
 
 ## FAQ
 
-**Is it a VPN?** No. Nothing is tunnelled to a server and your IP address does not change.
+**Is it a VPN?** Not by default. Nothing is tunnelled to a server and your IP address does
+not change. The optional [WARP method](#warp-method-windows) is a tunnel, but only for the
+apps it lists.
 
 **Will it work on my ISP?** The profiles were tuned on Türk Telekom. Other ISPs that block
 by hostname usually respond to the *Generic* profile or the *Turbo / Balanced / Strong*
@@ -153,8 +182,9 @@ log if you can.
 - **Connect** page: provider picker, power button, live measurements.
 - **Sites** tab: *All websites*, the built-in lists, and your own domains.
 - **Activity** tab: what the engine is doing right now.
-- **Settings** tab: bypass mode, DNS resolver, connect on launch, keep running in the tray,
-  start at login, encrypted DNS and HTTP/3 fallback (Windows), detailed activity.
+- **Settings** tab: connection method (Windows), bypass mode, DNS resolver, connect on
+  launch, keep running in the tray, start at login, encrypted DNS and HTTP/3 fallback
+  (Windows), detailed activity.
 
 ## Local data
 
@@ -162,9 +192,11 @@ log if you can.
 |---|---|---|
 | Settings | `%APPDATA%\Detour\settings.toml` | `~/Library/Application Support/Detour/settings.toml` |
 | Driver files, proxy backup | `%LOCALAPPDATA%\Detour\driver` | `~/Library/Application Support/Detour` |
+| WARP account and profile | `%LOCALAPPDATA%\Detour\warp` | |
 
 Uninstalling is deleting the app and those folders. If you enabled *Start at login*,
-turn it off first.
+turn it off first. If you used the WARP method, WireSock Secure Connect stays installed;
+remove it under Settings → Apps like any other program.
 
 ## Build from source
 
@@ -209,6 +241,9 @@ publishes the release.
 - Map: [Natural Earth](https://www.naturalearthdata.com/) 1:110m land, public domain.
 - The system-proxy approach follows [SpoofDPI](https://github.com/xvzc/SpoofDPI) and
   BypaxDPI.
+- The WARP method follows [SplitWire-Turkey](https://github.com/cagritaskn/SplitWire-Turkey)
+  and uses [WireSock Secure Connect](https://www.wiresock.net/) (freeware, downloaded on
+  first use, not shipped with Detour) and [wgcf](https://github.com/ViRb3/wgcf) (MIT).
 
 Use Detour only where doing so is lawful for you. It does not hide who you are from the
 sites you visit.

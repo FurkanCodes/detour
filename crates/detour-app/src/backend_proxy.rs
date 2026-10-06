@@ -1,4 +1,4 @@
-use super::{Counters, LogFn};
+use super::{Counters, LogFn, Warp};
 use crate::sysproxy;
 use detour_core::DomainList;
 use detour_engine::proxy::{Proxy, ProxyConfig};
@@ -18,8 +18,12 @@ impl Backend {
         dir: &Path,
         opts: Options,
         hosts: Option<DomainList>,
+        warp: Option<Warp>,
         log: LogFn,
     ) -> Result<Self, String> {
+        if warp.is_some() {
+            return Err("the WARP method needs Windows".into());
+        }
         let config = ProxyConfig::from_options(&opts, hosts);
         let proxy = Proxy::start(config, 0, log).map_err(|e| format!("cannot start the local proxy: {e}"))?;
         // On failure `proxy` is dropped here, which stops it.

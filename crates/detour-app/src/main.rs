@@ -14,6 +14,8 @@ mod settings;
 mod sysproxy;
 mod tray;
 mod ui;
+#[cfg(windows)]
+mod warp;
 #[cfg(not(windows))]
 #[path = "unix.rs"]
 mod sys;

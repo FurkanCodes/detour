@@ -21,4 +21,4 @@ pub mod runtime;
 
 pub use dns::DnsRedirect;
 pub use options::Options;
-pub use strategy::{Plan, SplitPos, Strategy};
+pub use strategy::{Plan, SplitPos, Strategy, StreamSplit};

@@ -82,6 +82,19 @@ mod tests {
         }
     }
 
+    /// A ClientHello spread over two TLS records is refused by many Turkish
+    /// bank and government sites (SSL errors), and on Türk Telekom only the
+    /// whole handshake in one-byte segments gets every site through.
+    #[test]
+    fn presets_send_browsers_one_byte_chunks_and_never_split_records() {
+        for p in presets() {
+            let args = p.preset.expand_args(Path::new(""), Path::new("hostlist"));
+            let opts = Options::parse(&args).unwrap().unwrap();
+            assert_eq!(opts.strategy.tls_record, None, "{}", p.id);
+            assert_eq!(opts.strategy.stream, detour_engine::StreamSplit::Chunk(1), "{}", p.id);
+        }
+    }
+
     #[test]
     fn builtin_lists_are_not_empty() {
         for l in LISTS {

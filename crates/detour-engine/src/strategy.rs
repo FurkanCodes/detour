@@ -42,11 +42,51 @@ impl FromStr for SplitPos {
     }
 }
 
+/// How the proxy engine cuts a TLS ClientHello (SpoofDPI's split modes, as
+/// used by BypaxDPI). Only the TCP segmentation changes, never the TLS bytes,
+/// so every server accepts the result; a packet engine cannot afford the
+/// hundreds of segments `Chunk(1)` produces, which is why this is proxy-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamSplit {
+    /// The same cuts as the packet engine (`split`, `chunk_size`).
+    #[default]
+    Positions,
+    /// Each byte of the hostname in its own segment.
+    Sni,
+    /// The whole ClientHello in segments of this many bytes.
+    Chunk(usize),
+}
+
+impl FromStr for StreamSplit {
+    type Err = String;
+
+    /// `pos`, `sni` or `chunk:N`.
+    fn from_str(s: &str) -> Result<Self, String> {
+        let bad = || format!("bad proxy split {s:?} (use pos, sni or chunk:N with N from 1 to 128)");
+        match s.trim() {
+            "pos" => Ok(StreamSplit::Positions),
+            "sni" => Ok(StreamSplit::Sni),
+            other => {
+                let n: usize = other.strip_prefix("chunk:").ok_or_else(bad)?.parse().map_err(|_| bad())?;
+                if (1..=128).contains(&n) {
+                    Ok(StreamSplit::Chunk(n))
+                } else {
+                    Err(bad())
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Strategy {
     pub split: Vec<SplitPos>,
     pub chunk_size: Option<usize>,
+    /// Proxy engine only: how to cut a ClientHello.
+    pub stream: StreamSplit,
     /// Proxy engine only: also cut the ClientHello into two TLS records here.
+    /// Some servers (many Turkish banks and government sites among them)
+    /// reject a ClientHello spread over two records, so no preset uses it.
     pub tls_record: Option<SplitPos>,
     /// Send the segments last-to-first.
     pub disorder: bool,
@@ -61,6 +101,7 @@ impl Default for Strategy {
         Self {
             split: vec![SplitPos::Abs(1), SplitPos::Sni(1)],
             chunk_size: None,
+            stream: StreamSplit::Positions,
             tls_record: None,
             disorder: false,
             fake_ttl: None,
@@ -119,8 +160,24 @@ impl Strategy {
         if hosts.is_some_and(|h| !h.matches(host)) {
             return None;
         }
-        let mut cuts = Vec::new();
-        self.collect_cuts(&mut cuts, payload.len(), sni.start, is_tls);
+        let len = payload.len();
+        let cuts: Vec<usize> = match self.stream {
+            StreamSplit::Sni if is_tls => (sni.start..=sni.end).filter(|&c| c > 0 && c < len).collect(),
+            StreamSplit::Chunk(size) if is_tls => {
+                // The first record is the ClientHello; anything after it goes whole.
+                let record_end = (5 + usize::from(u16::from_be_bytes([payload[3], payload[4]]))).min(len);
+                let mut cuts: Vec<usize> = (size..record_end).step_by(size).collect();
+                if record_end < len {
+                    cuts.push(record_end);
+                }
+                cuts
+            }
+            _ => {
+                let mut cuts = Vec::new();
+                self.collect_cuts(&mut cuts, len, sni.start, is_tls);
+                cuts
+            }
+        };
         (!cuts.is_empty()).then(|| (host.to_owned(), cuts))
     }
 

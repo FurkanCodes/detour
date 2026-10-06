@@ -6,7 +6,7 @@
 use crate::controller::{Controller, Status};
 use crate::diag::{Monitor, Phase, Repaint, DOWN_SECS, UP_SECS};
 use crate::fonts::{bold, medium};
-use crate::settings::{Mode, Resolver};
+use crate::settings::{Method, Mode, Resolver};
 use crate::tray::Tray;
 use crate::{assets, sys};
 use eframe::egui::{
@@ -783,6 +783,27 @@ impl DetourApp {
         page_title(ui, "Settings", "Make Detour work the way you do.");
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 12.0;
+            // WireSock, which runs the WARP tunnel, exists only for Windows.
+            if cfg!(windows) {
+                bubble(ui, |ui| {
+                    ui.label(RichText::new("Connection method").font(medium(15.0)));
+                    let mut method = ctl.settings.method;
+                    if let Some(m) = chips(ui, &Method::ALL.map(|m| (m, m.title())), method) {
+                        method = m;
+                    }
+                    ui.label(RichText::new(method.description()).small().color(MUTED));
+                    ctl.set_method(method);
+                    if method == Method::Warp {
+                        divider(ui);
+                        row(ui, "Tunnel browsers too", "Browsers, and the sites they open through Detour, also go through WARP", |ui| {
+                            let mut on = ctl.settings.warp_browsers;
+                            if toggle(ui, &mut on).changed() {
+                                ctl.set_warp_browsers(on);
+                            }
+                        });
+                    }
+                });
+            }
             bubble(ui, |ui| {
                 ui.label(RichText::new("Bypass mode").font(medium(15.0)));
                 let mut mode = ctl.settings.mode;
@@ -838,15 +859,18 @@ impl DetourApp {
 
             bubble(ui, |ui| {
                 ui.label(RichText::new("Network").font(medium(15.0)));
-                // These two need the packet engine, which only Windows has.
+                // Encrypted DNS uses WinHTTP, and HTTP/3 blocking the packet
+                // engine, which only the WARP method runs; both are Windows only.
                 if cfg!(windows) {
                     divider(ui);
-                    row(ui, "Encrypted DNS", "DNS-over-HTTPS for Cloudflare, Google or Quad9", |ui| {
+                    row(ui, "Encrypted DNS", "DNS over HTTPS: Cloudflare, or Google or Quad9 if picked", |ui| {
                         if toggle(ui, &mut ctl.settings.encrypted_dns).changed() {
                             ctl.save();
                             ctl.restart_if_on();
                         }
                     });
+                }
+                if cfg!(windows) && ctl.settings.method == Method::Warp {
                     divider(ui);
                     row(ui, "HTTP/3 fallback", "Block UDP/443 so sites retry over TCP (all-website mode)", |ui| {
                         if toggle(ui, &mut ctl.settings.quic_fallback).changed() {
@@ -883,6 +907,16 @@ impl DetourApp {
                     "Local proxy engine. Covers apps that follow the system proxy settings."
                 };
                 ui.label(RichText::new(engine).small().color(MUTED));
+                if ctl.warp().is_some() {
+                    ui.label(
+                        RichText::new(
+                            "WARP method: WireSock Secure Connect (wiresock.net) tunnels the chosen \
+                             apps to Cloudflare WARP; wgcf registers the free WARP account.",
+                        )
+                        .small()
+                        .color(MUTED),
+                    );
+                }
             });
             if pill(ui, "Quit Detour").clicked() {
                 ctl.disable();

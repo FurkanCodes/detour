@@ -26,9 +26,45 @@ impl Mode {
     pub fn description(self) -> &'static str {
         match self {
             Self::Profile => "Exactly the selected provider's strategy.",
-            Self::Turbo => "One SNI split, plus the provider's decoy if it has one.",
-            Self::Balanced => "Two-byte TLS chunks, plus the provider's decoy.",
-            Self::Strong => "One-byte TLS chunks for strict DPI filters, plus the provider's decoy.",
+            Self::Turbo => "Each byte of the site name in its own packet. Fastest; not enough for strict filters such as Türk Telekom's.",
+            Self::Balanced => "The TLS handshake in two-byte packets.",
+            Self::Strong => "The TLS handshake one byte per packet, as BypaxDPI does it for strict filters.",
+        }
+    }
+}
+
+/// How traffic gets past the filter.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Method {
+    /// Direct connections with reshaped handshakes and clean DNS.
+    #[default]
+    Detour,
+    /// Discord and Roblox (and optionally browsers) through Cloudflare WARP,
+    /// run by WireSock. Windows only.
+    Warp,
+}
+
+impl Method {
+    pub const ALL: [Self; 2] = [Self::Detour, Self::Warp];
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Detour => "Detour",
+            Self::Warp => "WARP tunnel",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Detour => {
+                "Direct connections: Detour reshapes the first packets and fixes DNS so the \
+                 provider's filter misses the site. Not a VPN; your IP address stays the same."
+            }
+            Self::Warp => {
+                "Discord and Roblox, voice included, go through a free Cloudflare WARP tunnel; \
+                 everything else stays on the Detour method. The first connect downloads and \
+                 installs WireSock Secure Connect (free for personal use) and creates a WARP \
+                 account. Tunnelled apps show a Cloudflare IP address."
+            }
         }
     }
 }
@@ -73,6 +109,9 @@ pub struct Settings {
     pub all_sites: bool,
     pub quic_fallback: bool,
     pub encrypted_dns: bool,
+    pub method: Method,
+    /// WARP method: browsers go through the tunnel too.
+    pub warp_browsers: bool,
 }
 
 impl Default for Settings {
@@ -89,6 +128,8 @@ impl Default for Settings {
             all_sites: true,
             quic_fallback: true,
             encrypted_dns: true,
+            method: Method::default(),
+            warp_browsers: false,
         }
     }
 }
@@ -175,6 +216,8 @@ mod tests {
             all_sites: false,
             quic_fallback: false,
             encrypted_dns: false,
+            method: Method::Warp,
+            warp_browsers: true,
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
@@ -195,6 +238,7 @@ mod tests {
         std::fs::write(&file, "preset = \"x\"\n").unwrap();
         assert_eq!(Settings::load(&file).preset, "x");
         assert!(Settings::load(&file).all_sites);
+        assert_eq!(Settings::load(&file).method, Method::Detour, "older files keep the direct method");
         std::fs::remove_dir_all(&path).unwrap();
     }
 

@@ -18,8 +18,12 @@ usage: detour-engine [options]
                         send DNS queries for listed hosts to this resolver
   --block-quic          block UDP/443 so browsers retry HTTP/3 over TCP
   --chunk-size=N        split the TLS handshake into N-byte segments (1..128)
+  --proxy-split=MODE    proxy engine: how to cut the ClientHello. chunk:N sends
+                        the whole of it in N-byte segments, sni sends each
+                        hostname byte apart, pos (default) uses --split-pos and
+                        --chunk-size
   --tlsrec=POS          proxy engine: also cut the ClientHello into two TLS records
-                        at POS (N, sni, sni+N, sni-N)
+                        at POS (N, sni, sni+N, sni-N). Some servers refuse this
   -v, --verbose         log every rewritten connection";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +69,7 @@ impl Options {
                 ("--hostlist", Some(v)) => o.hostlist = Some(v.into()),
                 ("--ports", Some(v)) => o.ports = parse_ports(v)?,
                 ("--split-pos", Some(v)) => o.strategy.split = parse_splits(v)?,
+                ("--proxy-split", Some(v)) => o.strategy.stream = v.parse()?,
                 ("--tlsrec", Some(v)) => {
                     o.strategy.tls_record = Some(v.parse().map_err(|e| format!("--tlsrec: {e}"))?)
                 }

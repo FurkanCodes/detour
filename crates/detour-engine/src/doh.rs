@@ -49,6 +49,10 @@ pub struct Client {
     connection: Internet,
     _session: Internet,
 }
+// WinHTTP is thread-safe: each query opens its own request on the shared
+// connection, so one client (and its kept-alive TLS session) serves every
+// proxy thread.
+unsafe impl Sync for Client {}
 impl Client {
     pub fn new(server: Ipv4Addr) -> io::Result<Self> {
         let agent = wide("Detour/0.2");

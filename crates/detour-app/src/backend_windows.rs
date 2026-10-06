@@ -1,18 +1,19 @@
-//! Windows runs two engines side by side:
+//! Windows works the way BypaxDPI does: a local proxy, set as the system
+//! (WinINet and WinHTTP) proxy, sends each ClientHello one byte per segment
+//! and resolves names over encrypted DNS. It resolves names itself, so a
+//! poisoned answer a browser cached earlier cannot break a site, and
+//! switching Detour off cuts every tunnel that went through it.
 //!
-//! * a local proxy, set as the system proxy, which browsers and other
-//!   proxy-aware programs use. It resolves names itself, so a poisoned DNS
-//!   answer a browser cached earlier cannot break a site, and switching
-//!   Detour off cuts every tunnel that went through it;
-//! * the WinDivert packet engine, for programs that ignore the system proxy
-//!   (games, launchers, desktop clients).
+//! The WARP method adds a WireSock tunnel for chosen programs (see `warp`),
+//! plus the WinDivert packet engine to fix their DNS.
 
-use super::{Counters, LogFn};
+use super::{Counters, LogFn, Warp};
+use crate::warp::{self, Tunnel};
 use crate::{driver, sysproxy};
 use detour_core::DomainList;
 use detour_engine::divert::Api;
 use detour_engine::doh;
-use detour_engine::proxy::{Proxy, ProxyConfig, ResolveFn};
+use detour_engine::proxy::{Proxy, ProxyConfig, Resolver};
 use detour_engine::runtime::Engine;
 use detour_engine::Options;
 use std::net::Ipv4Addr;
@@ -25,6 +26,7 @@ static API: Mutex<Option<Arc<Api>>> = Mutex::new(None);
 pub struct Backend {
     proxy: Option<Proxy>,
     engine: Option<Engine>,
+    tunnel: Option<Tunnel>,
     dir: PathBuf,
     /// The system proxy points at `proxy` and has not been restored yet.
     system_proxy_set: bool,
@@ -37,16 +39,47 @@ impl Backend {
         dir: &Path,
         opts: Options,
         hosts: Option<DomainList>,
+        warp: Option<Warp>,
         log: LogFn,
     ) -> Result<Self, String> {
+        // The tunnel comes first: when the user picked WARP and it cannot
+        // connect, nothing else is set up and they see why.
+        let tunnel = match warp {
+            Some(w) => {
+                log("Setting up the WARP tunnel\u{2026}".into());
+                Some(Tunnel::connect(&warp::dir(dir), &warp::apps(w.browsers), &log)?)
+            }
+            None => None,
+        };
         let mut config = ProxyConfig::from_options(&opts, hosts.clone());
-        config.fallback = Some(encrypted_fallback(opts.doh.unwrap_or(Ipv4Addr::new(1, 1, 1, 1))));
+        if let Some(server) = opts.doh {
+            // As BypaxDPI does: names go to encrypted DNS first, which the
+            // provider can neither read nor poison; the plain resolver stays
+            // behind it for when it gives no answer.
+            match doh::probe(server).and_then(|()| doh::Client::new(server)) {
+                Ok(client) => config.resolvers.insert(0, encrypted(server, client)),
+                Err(e) => log(format!("Encrypted DNS via {server} is unreachable ({e}); using plain DNS")),
+            }
+        }
         let proxy = Proxy::start(config, 0, log.clone());
-        let engine = start_engine(dir, opts, hosts, log.clone());
+        // Like BypaxDPI, the direct method is the proxy alone: nothing
+        // rewrites packets of programs that ignore it. With the WARP method
+        // the packet engine only fixes DNS, since packets cannot be told
+        // apart by program and a decoy ClientHello sent into the tunnel
+        // would reach the server (its hop count starts again at Cloudflare).
+        let engine = match &tunnel {
+            Some(_) if opts.dns_redirect.is_some() || opts.doh.is_some() || opts.block_quic => {
+                let mut engine_opts = opts;
+                engine_opts.ports.clear();
+                Some(start_engine(dir, engine_opts, hosts, log.clone()))
+            }
+            _ => None,
+        };
 
         let mut backend = Backend {
             proxy: None,
             engine: None,
+            tunnel,
             dir: dir.to_owned(),
             system_proxy_set: false,
         };
@@ -63,11 +96,12 @@ impl Backend {
             Err(e) => problems.push(format!("browser proxy: cannot start the local proxy: {e}")),
         }
         match engine {
-            Ok(engine) => backend.engine = Some(engine),
-            Err(e) => problems.push(format!("packet engine: {e}")),
+            Some(Ok(engine)) => backend.engine = Some(engine),
+            Some(Err(e)) => problems.push(format!("packet engine: {e}")),
+            None => {}
         }
 
-        if backend.proxy.is_none() && backend.engine.is_none() {
+        if backend.proxy.is_none() && backend.engine.is_none() && backend.tunnel.is_none() {
             return Err(problems.join("; "));
         }
         for p in problems {
@@ -104,8 +138,8 @@ impl Backend {
     }
 
     /// Gives the user's proxy settings back first (so nothing new is sent to
-    /// a proxy that is about to vanish), then cuts the proxy's tunnels and
-    /// closes the packet engine.
+    /// a proxy that is about to vanish), then cuts the proxy's tunnels,
+    /// closes the packet engine and takes the WARP tunnel down.
     pub fn stop(&mut self) -> Result<(), String> {
         let mut result = Ok(());
         if self.system_proxy_set {
@@ -118,6 +152,9 @@ impl Backend {
         if let Some(engine) = self.engine.as_mut() {
             let stopped = engine.stop();
             result = result.and(stopped);
+        }
+        if let Some(mut tunnel) = self.tunnel.take() {
+            result = result.and(tunnel.disconnect());
         }
         result
     }
@@ -139,11 +176,13 @@ impl Drop for Backend {
     }
 }
 
-/// Some resolvers return nothing for names they steer per client (Roblox's
-/// telemetry hosts, for one). The proxy then asks `server` over HTTPS, which
-/// the provider cannot read or poison.
-fn encrypted_fallback(server: Ipv4Addr) -> ResolveFn {
-    Arc::new(move |name| doh::Client::new(server)?.resolve_a(name))
+/// DNS over HTTPS through one shared client, so lookups reuse its connection.
+fn encrypted(server: Ipv4Addr, client: doh::Client) -> Resolver {
+    let client = Arc::new(client);
+    Resolver {
+        name: format!("https://{server}"),
+        lookup: Arc::new(move |name| client.resolve_a(name)),
+    }
 }
 
 fn start_engine(

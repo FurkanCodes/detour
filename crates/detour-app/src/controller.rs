@@ -1,8 +1,8 @@
 //! App logic: owns the settings and the running engine. No UI code here.
 
 use crate::assets::{self, PresetEntry};
-use crate::backend::Backend;
-use crate::settings::{Mode, Resolver, Settings};
+use crate::backend::{Backend, Warp};
+use crate::settings::{Method, Mode, Resolver, Settings};
 use crate::sys;
 use detour_core::DomainList;
 use detour_engine::Options;
@@ -124,7 +124,11 @@ impl Controller {
             Ok(pending) => {
                 self.pending = Some(pending);
                 self.status = Status::Starting;
-                self.log("Starting the proxy and the packet engine…");
+                self.log(if self.warp().is_some() {
+                    "Starting the WARP tunnel, the proxy and the packet engine…"
+                } else {
+                    "Starting the proxy…"
+                });
             }
             Err(e) => {
                 self.log(format!("Could not start: {e}"));
@@ -180,8 +184,9 @@ impl Controller {
                         self.engine = Some(engine);
                         self.started = Some(Instant::now());
                         self.status = Status::On;
+                        let warp = if self.warp().is_some() { " · WARP tunnel" } else { "" };
                         self.log(format!(
-                            "Connected · {} · {}",
+                            "Connected · {} · {}{warp}",
                             self.preset().preset.name,
                             self.settings.mode.title()
                         ));
@@ -227,18 +232,26 @@ impl Controller {
     pub fn options(&self) -> Result<Options, String> {
         let mut opts = engine_options(&self.preset().preset)?;
         use detour_engine::strategy::SplitPos::{Abs, Sni};
+        use detour_engine::StreamSplit;
         // Profile mode runs the preset exactly as written. The other modes
-        // replace only the splitting; the preset's decoy (--fake-ttl) stays,
-        // since on some ISPs it is the part that gets traffic through.
-        let (split, chunk_size) = match self.settings.mode {
-            Mode::Profile => (opts.strategy.split.clone(), opts.strategy.chunk_size),
-            Mode::Turbo => (vec![Sni(1)], None),
-            Mode::Balanced => (vec![Abs(1), Sni(1)], Some(2)),
-            Mode::Strong => (vec![Abs(2), Sni(2)], Some(1)),
+        // are BypaxDPI's: they replace the splitting (the proxy's whole-
+        // handshake cuts and the packet engine's positions); the preset's
+        // decoy (--fake-ttl) stays for the packet engine, since on some ISPs
+        // it is the part that gets other programs through.
+        let (split, chunk_size, stream) = match self.settings.mode {
+            Mode::Profile => (
+                opts.strategy.split.clone(),
+                opts.strategy.chunk_size,
+                opts.strategy.stream,
+            ),
+            Mode::Turbo => (vec![Sni(1)], None, StreamSplit::Sni),
+            Mode::Balanced => (vec![Abs(1), Sni(1)], Some(2), StreamSplit::Chunk(2)),
+            Mode::Strong => (vec![Abs(2), Sni(2)], Some(1), StreamSplit::Chunk(1)),
         };
         if self.settings.mode != Mode::Profile {
             opts.strategy.split = split;
             opts.strategy.chunk_size = chunk_size;
+            opts.strategy.stream = stream;
             opts.strategy.disorder = false;
         }
         opts.dns_redirect = match self.settings.resolver {
@@ -249,15 +262,15 @@ impl Controller {
             Resolver::System => None,
         };
         opts.verbose = self.settings.detailed_logs;
-        // Encrypted DNS applies only to an explicitly chosen public resolver;
-        // "provider DNS" keeps the preset's own resolver. The plain redirect
-        // above stays set as the fallback when HTTPS lookups fail.
+        // Encrypted DNS goes first, as in BypaxDPI (Cloudflare by default,
+        // so "provider DNS" uses it too). The plain redirect above stays set
+        // as the fallback when HTTPS lookups fail.
         if self.settings.encrypted_dns {
             opts.doh = match self.settings.resolver {
-                Resolver::Cloudflare => Some(Ipv4Addr::new(1, 1, 1, 1)),
+                Resolver::Profile | Resolver::Cloudflare => Some(Ipv4Addr::new(1, 1, 1, 1)),
                 Resolver::Google => Some(Ipv4Addr::new(8, 8, 8, 8)),
                 Resolver::Quad9 => Some(Ipv4Addr::new(9, 9, 9, 9)),
-                Resolver::Profile | Resolver::System => None,
+                Resolver::System => None,
             };
         }
         opts.block_quic = self.settings.all_sites && self.settings.quic_fallback;
@@ -292,6 +305,32 @@ impl Controller {
             self.save();
             self.restart_if_on();
         }
+    }
+
+    pub fn set_method(&mut self, method: Method) {
+        if self.settings.method != method {
+            self.settings.method = method;
+            self.save();
+            self.restart_if_on();
+        }
+    }
+
+    pub fn set_warp_browsers(&mut self, on: bool) {
+        if self.settings.warp_browsers != on {
+            self.settings.warp_browsers = on;
+            self.save();
+            if self.settings.method == Method::Warp {
+                self.restart_if_on();
+            }
+        }
+    }
+
+    /// The WARP tunnel to run, if the method asks for one. Only Windows
+    /// has it.
+    pub fn warp(&self) -> Option<Warp> {
+        (cfg!(windows) && self.settings.method == Method::Warp).then_some(Warp {
+            browsers: self.settings.warp_browsers,
+        })
     }
 
     pub fn set_resolver(&mut self, resolver: Resolver) {
@@ -355,6 +394,7 @@ impl Controller {
             return Err("No sites selected. Pick some on the Sites tab.".into());
         }
         let opts = self.options()?;
+        let warp = self.warp();
         let log = self.log.clone();
         let dir = self
             .driver_dir
@@ -374,6 +414,7 @@ impl Controller {
                         &dir,
                         opts,
                         hosts,
+                        warp,
                         Arc::new(move |line| push_log(&log, line)),
                     )?;
                     if cancel.load(Ordering::Acquire) {
@@ -493,6 +534,7 @@ mod tests {
         assert_eq!(opts.strategy.split.len(), 1);
         assert!(!opts.strategy.disorder);
         assert_eq!(opts.strategy.chunk_size, None);
+        assert_eq!(opts.strategy.stream, detour_engine::StreamSplit::Sni);
         assert_eq!(opts.dns_redirect.unwrap().to_string(), "1.1.1.1:53");
         assert_eq!(opts.doh, Some(Ipv4Addr::new(1, 1, 1, 1)));
         assert!(!opts.verbose);
@@ -500,6 +542,7 @@ mod tests {
         c.set_resolver(Resolver::System);
         let opts = c.options().unwrap();
         assert_eq!(opts.strategy.chunk_size, Some(1));
+        assert_eq!(opts.strategy.stream, detour_engine::StreamSplit::Chunk(1));
         assert!(!opts.strategy.disorder);
         assert!(opts.dns_redirect.is_none() && opts.doh.is_none());
         let saved = Settings::load(&dir.join("settings.toml"));
@@ -518,8 +561,10 @@ mod tests {
             let opts = c.options().unwrap();
             assert_eq!(opts.strategy, preset.strategy, "{id}");
             assert_eq!(opts.dns_redirect, preset.dns_redirect, "{id}");
-            assert!(opts.doh.is_none(), "{id}: provider DNS must not become DoH");
+            assert_eq!(opts.doh, Some(Ipv4Addr::new(1, 1, 1, 1)), "{id}: Cloudflare over HTTPS first, as BypaxDPI");
         }
+        c.settings.encrypted_dns = false;
+        assert!(c.options().unwrap().doh.is_none());
         c.set_preset("aggressive");
         assert_eq!(c.options().unwrap().strategy.fake_ttl, Some(4));
         assert!(c.options().unwrap().strategy.disorder);
@@ -549,6 +594,21 @@ mod tests {
         c.set_all_sites(false);
         assert!(c.active_hosts().unwrap().is_empty());
         assert!(!c.options().unwrap().block_quic);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn warp_method_is_saved_and_windows_only() {
+        let (mut c, dir) = controller("warp");
+        assert!(c.warp().is_none(), "the direct method is the default");
+        c.set_method(Method::Warp);
+        c.set_warp_browsers(true);
+        let expected = cfg!(windows).then_some(Warp { browsers: true });
+        assert_eq!(c.warp(), expected);
+        let saved = Settings::load(&dir.join("settings.toml"));
+        assert_eq!((saved.method, saved.warp_browsers), (Method::Warp, true));
+        c.set_method(Method::Detour);
+        assert!(c.warp().is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 
