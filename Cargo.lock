@@ -374,7 +374,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "detour-app"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "detour-core",
  "detour-engine",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "detour-cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "detour-core",
  "detour-service",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "detour-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "detour-engine"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "detour-core",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "detour-service"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "detour-core",
  "thiserror 2.0.21",

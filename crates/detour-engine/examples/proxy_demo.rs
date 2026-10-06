@@ -14,6 +14,7 @@ fn main() {
     let opts = Options::parse(args)
         .expect("bad options")
         .expect("no help here");
+    #[cfg_attr(not(windows), allow(unused_mut))] // only Windows adds encrypted DNS
     let mut cfg = ProxyConfig::from_options(&opts, None);
     #[cfg(windows)]
     if let Some(server) = opts.doh {
