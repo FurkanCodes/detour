@@ -11,12 +11,10 @@ The builds are not code-signed yet, so Windows SmartScreen also warns on first l
 
 ## What's new
 
-- **No more SSL errors on Turkish bank and government sites.** Akbank, İşbank, Ziraat, PTT and e-Devlet failed with SSL errors because Detour split the TLS handshake into two records, which they refuse. That trick is gone.
-- **Windows now works the way [BypaxDPI](https://github.com/BypaxDPI/BypaxDPI-Windows) does.** The local proxy sends the whole TLS handshake one byte per packet, which gets Discord and Roblox through Türk Telekom while every site still accepts it. Names resolve through Cloudflare over HTTPS first and never fall back to the provider's poisoned DNS.
-- **Windows: the WinHTTP proxy is set too**, so system services and many native programs use Detour, with BypaxDPI's list of hosts that stay direct (connectivity checks, Windows Update, game launchers). Your own settings are saved and restored.
-- **Windows: no more packet rewriting or decoy packets** in the default method, so other programs' connections are left alone.
-- **Turbo, Balanced and Strong** now match BypaxDPI's modes. On Türk Telekom keep *Use provider profile* or *Strong*.
-- **New, experimental: WARP tunnel (Windows).** Settings → *Connection method* → *WARP tunnel* sends Discord and Roblox, voice included, through a free Cloudflare WARP tunnel run by WireSock. The first connect downloads and installs WireSock.
-- macOS keeps the native window and menu bar from 0.2.2.
+- **Closing Detour now turns it off and cleans up.** Before, the close button only hid Detour in the tray while it kept running, and games whose login goes through the Windows proxy settings could not sign in. Closing now quits and puts your proxy settings back. To keep Detour running in the tray, turn on *Keep running in the tray* in Settings (it is now off by default).
+- **Windows: signing out, restarting or shutting down** while connected now puts your proxy settings back too.
+- **Windows: the packet driver is unloaded** when Detour turns off, instead of staying loaded until Windows restarts. Some games' anti-cheat refuses to run while it is loaded. Detour also unloads a driver left behind by an earlier version the next time it starts.
+- **Quitting while Detour is still connecting** now waits for it and undoes the connection, instead of leaving it half set up.
+- **WARP tunnel:** turning it off also removes Detour's profile from WireSock.
 
 See the [README](https://github.com/FurkanCodes/detour#readme) for how it works and the FAQ.
