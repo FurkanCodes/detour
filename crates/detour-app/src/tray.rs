@@ -54,7 +54,7 @@ impl Tray {
                         "on" => ctl.enable(),
                         "off" => ctl.disable(),
                         _ => {
-                            ctl.disable();
+                            ctl.shutdown();
                             std::process::exit(0);
                         }
                     }

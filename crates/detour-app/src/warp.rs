@@ -187,9 +187,12 @@ impl Tunnel {
     }
 }
 
+/// Disconnects and removes Detour's profile from WireSock, so nothing can
+/// bring the tunnel back up after Detour is gone.
 fn take_down(cli: &Path, marker: &Path) -> Result<(), String> {
     match run(cli, &["disconnect"], None, CLI_TIMEOUT) {
         Ok((0, _)) => {
+            let _ = run(cli, &["delete", PROFILE], None, CLI_TIMEOUT);
             let _ = std::fs::remove_file(marker);
             Ok(())
         }

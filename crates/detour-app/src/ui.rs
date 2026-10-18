@@ -209,7 +209,7 @@ impl eframe::App for DetourApp {
         let mut ctl = ctl_arc.lock().unwrap_or_else(|e| e.into_inner());
 
         if ctx.input(|i| i.viewport().close_requested())
-            && ctl.settings.close_to_tray
+            && ctl.settings.keep_in_tray
             && self.tray.is_some()
             && self.capture.is_none()
         {
@@ -837,8 +837,8 @@ impl DetourApp {
                     changed |= toggle(ui, &mut ctl.settings.auto_enable).changed();
                 });
                 divider(ui);
-                row(ui, &format!("Keep running in the {place}"), "Closing the window hides it instead of quitting", |ui| {
-                    changed |= toggle(ui, &mut ctl.settings.close_to_tray).changed();
+                row(ui, &format!("Keep running in the {place}"), "Closing the window hides it and Detour stays on", |ui| {
+                    changed |= toggle(ui, &mut ctl.settings.keep_in_tray).changed();
                 });
                 divider(ui);
                 row(ui, "Start at login", &format!("Opens hidden in the {place} when you sign in"), |ui| {
@@ -920,7 +920,7 @@ impl DetourApp {
             });
             if pill(ui, "Quit Detour").clicked() {
                 ctl.disable();
-                ctl.settings.close_to_tray = false;
+                ctl.settings.keep_in_tray = false;
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ui.add_space(6.0);

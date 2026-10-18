@@ -15,6 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const LOG_LINES: usize = 500;
+/// How long quitting waits for a start in progress (a WARP connect takes up
+/// to about a minute). Past that the next launch cleans up instead.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -149,6 +152,22 @@ impl Controller {
         }
         self.started = None;
         self.status = Status::Off;
+    }
+
+    /// Turns everything off before Detour exits. Unlike `disable`, it waits
+    /// for a start still in progress, so the proxy settings or WARP tunnel it
+    /// was setting up are put back too instead of being left behind when the
+    /// process ends.
+    pub fn shutdown(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            pending.cancelled.store(true, Ordering::Release);
+            // The worker undoes a cancelled start before it answers; a start
+            // that finished just before the cancel is stopped below.
+            if let Ok(Ok(engine)) = pending.receiver.recv_timeout(SHUTDOWN_WAIT) {
+                self.engine = Some(engine);
+            }
+        }
+        self.disable();
     }
 
     pub fn toggle(&mut self) {
@@ -627,6 +646,36 @@ mod tests {
         assert!(sender.send(Err("late startup error".into())).is_err());
         c.poll();
         assert_eq!(c.status, Status::Off);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shutdown_waits_for_a_start_in_progress() {
+        let (mut c, dir) = controller("shutdown");
+        let (sender, receiver) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        c.pending = Some(PendingStart {
+            receiver,
+            cancelled: cancelled.clone(),
+        });
+        c.status = Status::Starting;
+        let undone = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let (cancelled, undone) = (cancelled.clone(), undone.clone());
+            std::thread::spawn(move || {
+                while !cancelled.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                // Stands in for the backend being dropped (and so undone).
+                std::thread::sleep(Duration::from_millis(100));
+                undone.store(true, Ordering::Release);
+                let _ = sender.send(Err("Startup cancelled".into()));
+            })
+        };
+        c.shutdown();
+        assert!(undone.load(Ordering::Acquire), "shutdown returned before the start was undone");
+        assert_eq!(c.status, Status::Off);
+        worker.join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

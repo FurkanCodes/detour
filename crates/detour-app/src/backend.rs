@@ -32,9 +32,13 @@ pub struct Warp {
     pub browsers: bool,
 }
 
-/// Undoes anything a previous run left behind after a crash.
+/// Undoes anything a previous run left behind after a crash, including a
+/// WinDivert driver still loaded by a version that did not unload it.
 pub fn recover(dir: &std::path::Path) {
     let _ = crate::sysproxy::restore(dir);
     #[cfg(windows)]
-    crate::warp::recover(&crate::warp::dir(dir));
+    {
+        crate::warp::recover(&crate::warp::dir(dir));
+        crate::driver::unload();
+    }
 }
