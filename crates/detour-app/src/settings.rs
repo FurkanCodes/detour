@@ -100,8 +100,10 @@ pub struct Settings {
     pub disabled_lists: Vec<String>,
     /// Turn protection on as soon as Detour opens.
     pub auto_enable: bool,
-    /// Closing the window keeps Detour running in the tray.
-    pub close_to_tray: bool,
+    /// Closing the window only hides it and Detour stays on in the tray.
+    /// Off by default, so closing Detour turns everything off. (It replaces
+    /// `close_to_tray`, which was on by default; that key is ignored.)
+    pub keep_in_tray: bool,
     pub mode: Mode,
     pub resolver: Resolver,
     /// Domain-level logs are optional to keep the packet path quiet.
@@ -121,7 +123,7 @@ impl Default for Settings {
             custom_domains: Vec::new(),
             disabled_lists: Vec::new(),
             auto_enable: false,
-            close_to_tray: true,
+            keep_in_tray: false,
             mode: Mode::default(),
             resolver: Resolver::default(),
             detailed_logs: false,
@@ -209,7 +211,7 @@ mod tests {
             custom_domains: vec!["example.com".into()],
             disabled_lists: vec!["roblox".into()],
             auto_enable: false,
-            close_to_tray: false,
+            keep_in_tray: true,
             mode: Mode::Balanced,
             resolver: Resolver::Cloudflare,
             detailed_logs: true,
@@ -239,6 +241,8 @@ mod tests {
         assert_eq!(Settings::load(&file).preset, "x");
         assert!(Settings::load(&file).all_sites);
         assert_eq!(Settings::load(&file).method, Method::Detour, "older files keep the direct method");
+        std::fs::write(&file, "close_to_tray = true\n").unwrap();
+        assert!(!Settings::load(&file).keep_in_tray, "closing quits, even for files saved with the old default");
         std::fs::remove_dir_all(&path).unwrap();
     }
 

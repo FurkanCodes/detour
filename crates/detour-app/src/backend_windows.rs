@@ -139,7 +139,8 @@ impl Backend {
 
     /// Gives the user's proxy settings back first (so nothing new is sent to
     /// a proxy that is about to vanish), then cuts the proxy's tunnels,
-    /// closes the packet engine and takes the WARP tunnel down.
+    /// closes the packet engine, unloads its driver and takes the WARP
+    /// tunnel down.
     pub fn stop(&mut self) -> Result<(), String> {
         let mut result = Ok(());
         if self.system_proxy_set {
@@ -149,9 +150,12 @@ impl Backend {
         if let Some(mut proxy) = self.proxy.take() {
             proxy.stop();
         }
-        if let Some(engine) = self.engine.as_mut() {
+        if let Some(mut engine) = self.engine.take() {
             let stopped = engine.stop();
             result = result.and(stopped);
+            // The driver only unloads once the engine's handle is closed.
+            drop(engine);
+            driver::unload();
         }
         if let Some(mut tunnel) = self.tunnel.take() {
             result = result.and(tunnel.disconnect());

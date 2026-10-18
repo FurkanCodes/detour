@@ -50,6 +50,10 @@ pub fn listen_for_show_requests(on_request: impl Fn() + Send + 'static) {
     });
 }
 
+/// Windows only: on macOS a dead proxy left by logging out is repaired the
+/// next time Detour starts.
+pub fn on_session_end(_cleanup: impl Fn() + Send + Sync + 'static) {}
+
 pub fn request_show() {
     SHOW_REQUESTED.store(true, Ordering::SeqCst);
 }

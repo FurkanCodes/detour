@@ -56,7 +56,7 @@ fn run_headless(ctl: &Arc<Mutex<Controller>>, control: &str) {
         drop(c);
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    ctl.lock().unwrap().disable();
+    ctl.lock().unwrap().shutdown();
 }
 
 fn main() {
@@ -110,6 +110,12 @@ fn main() {
     if let Some(control) = headless {
         run_headless(&ctl, &control);
         return;
+    }
+    if capture.is_none() {
+        // Signing out or shutting down ends the process without returning
+        // from the event loop, so the cleanup below would never run.
+        let ctl = ctl.clone();
+        sys::on_session_end(move || ctl.lock().unwrap_or_else(|e| e.into_inner()).shutdown());
     }
     if auto_enable {
         ctl.lock().unwrap().enable();
@@ -185,9 +191,7 @@ fn main() {
 
     // The tray's event handlers keep the controller alive, so stop the
     // engine explicitly instead of relying on Drop.
-    if let Ok(mut c) = ctl.lock() {
-        c.disable();
-    }
+    ctl.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
     if let Err(e) = result {
         sys::error_box(&format!("Detour could not open its window.\n\n{e}"));
     }

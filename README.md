@@ -98,9 +98,11 @@ and other proxy-aware apps use it. It resolves names itself, so a poisoned DNS a
 browser cached earlier cannot break a site, and switching Detour off cuts every connection
 that went through it. Connectivity checks, Windows Update and game launchers stay direct.
 
-Your own proxy settings (both kinds) are saved first and restored when you disconnect. If Windows shuts
-down or Detour is killed while connected, a one-time logon task puts them back, and Detour
-also repairs them the next time it starts.
+Your own proxy settings (both kinds) are saved first and restored when you disconnect.
+Closing Detour turns it off and puts everything back, and so does signing out of or shutting
+down Windows; only with *Keep running in the tray* on does closing the window leave it
+running. If Detour is killed while connected, a one-time logon task puts the browser proxy
+back, and Detour also repairs both the next time it starts.
 
 On first connect Detour also exempts your installed Microsoft Store apps from Windows'
 loopback restriction, because otherwise they cannot reach a proxy on `127.0.0.1` while it
@@ -127,8 +129,10 @@ itself. The first connect:
    WARP device.
 
 Both downloads are checked against pinned SHA-256 checksums before they run. Later connects
-take a few seconds. Disconnecting takes the tunnel down, and if Detour is killed while
-connected, it takes the tunnel down the next time it starts. A fresh WireSock install
+take a few seconds. Disconnecting takes the tunnel down, removes Detour's profile from
+WireSock and unloads the packet driver (which would otherwise stay loaded until Windows
+restarts, and some games' anti-cheat refuses to run alongside it). If Detour is killed while
+connected, it does this the next time it starts. A fresh WireSock install
 sometimes needs a Windows restart before its service starts; Detour says so when that
 happens.
 

@@ -4,16 +4,21 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, RECT};
+use std::sync::OnceLock;
+use windows_sys::Win32::Foundation::{
+    GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
     INFINITE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetWindowRect, MessageBoxW, MB_ICONERROR, MB_OK,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, GetWindowRect,
+    MessageBoxW, RegisterClassW, MB_ICONERROR, MB_OK, MSG, WM_ENDSESSION, WNDCLASSW,
 };
 
 const TASK_NAME: &str = "Detour";
@@ -22,6 +27,7 @@ const MUTEX_NAME: &str = "Global\\DetourSingleInstance";
 const SHOW_EVENT: &str = "Global\\DetourShowWindow";
 
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SESSION_END: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
@@ -64,6 +70,62 @@ pub fn listen_for_show_requests(on_request: impl Fn() + Send + 'static) {
         request_show();
         on_request();
     });
+}
+
+/// Runs `cleanup` when Windows signs out, restarts or shuts down. Windows
+/// ends the process right after, without letting `main` finish, so the
+/// system proxy would otherwise keep pointing at a port nobody listens on.
+pub fn on_session_end(cleanup: impl Fn() + Send + Sync + 'static) {
+    if SESSION_END.set(Box::new(cleanup)).is_err() {
+        return;
+    }
+    std::thread::spawn(|| unsafe {
+        let class = wide("DetourSessionWatcher");
+        let instance = GetModuleHandleW(std::ptr::null());
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(session_proc),
+            hInstance: instance,
+            lpszClassName: class.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        if RegisterClassW(&wc) == 0 {
+            return;
+        }
+        // A hidden top-level window: message-only windows are not told
+        // that the session is ending.
+        let hwnd = CreateWindowExW(
+            0,
+            class.as_ptr(),
+            class.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
+        if hwnd.is_null() {
+            return;
+        }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            DispatchMessageW(&msg);
+        }
+    });
+}
+
+unsafe extern "system" fn session_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // wparam is false when the sign-out or shutdown was cancelled.
+    if msg == WM_ENDSESSION && wparam != 0 {
+        if let Some(cleanup) = SESSION_END.get() {
+            cleanup();
+        }
+        return 0;
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 static LAST_SHAPE: AtomicU64 = AtomicU64::new(0);
